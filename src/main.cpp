@@ -4,16 +4,16 @@
 #include <SPI.h>
 #include <lib/mcp2515.h>
 struct can_frame tempCanMessage; // To send for one peace of data. Can be duplicated for other ID's and data
+struct can_frame APPSCanMessage; // To send for one peace of data. Can be duplicated for other ID's and data
 MCP2515 can0(10);                // Chip select
 // Temperature Sensor for Battery Management System
 // For "Li-ion building block Li4P25RT"
 
-#define VOLTAGE_OFFSET -0.10
+#define VOLTAGE_OFFSET 0
 #define LIGHT_PIN 13
+#define APPS_CAN_ID 0x879
+
 int fan = 0; // fan speed
-float volt[33] = {2.44, 2.42, 2.40, 2.38, 2.35, 2.32, 2.27, 2.23, 2.17, 2.11, 2.05, 1.99, 1.86, 1.80, 1.74, 1.68, 1.63, 1.59, 1.55, 1.51, 1.48, 1.45, 1.43, 1.40, 1.38, 1.37, 1.35, 1.34, 1.33, 1.32, 1.31, 1.30};
-float temp[33] = {-40, -35, -30, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120};
-float diff[33] = {};
 int sensorPins[5] = {A0, A1, A2, A3, A4};
 float sensor1 = 0;
 unsigned long registerTime = 0;
@@ -21,27 +21,37 @@ float fabs(float value)
 {
   return value < 0 ? -value : value;
 }
+
+// https://elvistkf.wordpress.com/2016/04/19/arduino-implementation-of-filters/
+// Low pass filtering function
+const float alpha = 0.0003;
+float data_filtered[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+float lowPassFilter(int index, float data)
+{
+  // Low Pass Filter
+  int n = index * 2 - 1;
+  data_filtered[n] = alpha * data + (1 - alpha) * data_filtered[n - 1];
+  // Store the last filtered data in data_filtered[n-1]
+  data_filtered[n - 1] = data_filtered[n];
+  // Print Data
+  return data_filtered[n];
+}
+
 float getSensorVoltage(int sensor)
 {
   return ((analogRead(sensor) * 5.0 / 1023.0) + VOLTAGE_OFFSET);
 }
-float convertToTemperature(float voltage)
+float convertToTemperature(int index, float voltage)
 {
   int currentIndex = 0;
-  for (int j = 0; j <= 31; j++)
-  {
-    float delta = (volt[j] - voltage);
-    diff[j] = fabs(delta);
-  }
-
-  for (int i = 0; i <= 31; i++)
-  {
-    if (diff[i] <= diff[currentIndex])
-    {
-      currentIndex = i;
-    }
-  }
-  return temp[currentIndex];
+  float y = -86.956 * voltage + 188.695;
+  float temp = lowPassFilter(index, y);
+  if (temp >= 40)
+    temp = temp - 20;
+  else if (temp >= 30)
+    temp = temp - 10;
+  return temp;
 }
 void setup()
 {
@@ -67,6 +77,17 @@ void setup()
 
   can0.reset();
   can0.setBitrate(CAN_500KBPS); // Rate of CANBUS 500kbps for normal usage
+  // Configure CAN-bus masks
+  can0.setConfigMode();
+  can0.setFilterMask(MCP2515::MASK0, false, 0xFFF);
+  can0.setFilterMask(MCP2515::MASK1, false, 0xFFF);
+  can0.setFilter(MCP2515::RXF0, false, APPS_CAN_ID);
+  can0.setFilter(MCP2515::RXF1, false, APPS_CAN_ID);
+  can0.setFilter(MCP2515::RXF2, false, APPS_CAN_ID);
+  can0.setFilter(MCP2515::RXF3, false, APPS_CAN_ID);
+  can0.setFilter(MCP2515::RXF4, false, APPS_CAN_ID);
+  can0.setFilter(MCP2515::RXF5, false, APPS_CAN_ID);
+
   can0.setNormalMode();
 
   Serial.begin(9600);
@@ -76,10 +97,10 @@ void setup()
   Serial.println((String) "#16,Temperature, Voltage");
   Serial.println((String) "#17,Temperature, Voltage");
   Serial.println((String) "#18,Temperature, Voltage");
-  Serial.println((String) "Summary,Max,Max Index,Min,Min Index,Avg");
+  Serial.println((String) "Summary,Max,Max Index,Min,Min Index,Avg, R2D");
 }
 unsigned long tempSendTime, serialTime;
-
+int R2D = 0;
 void loop()
 {
   // --- Canbus receive ---
@@ -89,6 +110,14 @@ void loop()
   // {
   //   // frame contains received message
   // }
+  if (can0.readMessage(&APPSCanMessage) == MCP2515::ERROR_OK)
+  {
+    // frame contains received message
+    if (APPSCanMessage.can_id == APPS_CAN_ID)
+    {
+      R2D = APPSCanMessage.data[0];
+    }
+  }
   float voltages[5] = {};
   float temperatures[5] = {};
   int i = 0;
@@ -98,7 +127,7 @@ void loop()
   for (int sensor : sensorPins)
   {
     voltages[i] = getSensorVoltage(sensor);
-    temperatures[i] = convertToTemperature(voltages[i]);
+    temperatures[i] = convertToTemperature(i + 1, voltages[i]);
     tempAvg += temperatures[i];
     maxIndex = (temperatures[i] > temperatures[maxIndex] ? i : maxIndex);
     minIndex = (temperatures[i] < temperatures[minIndex] ? i : minIndex);
@@ -113,7 +142,7 @@ void loop()
   if (millis() - serialTime >= 500)
 
   {
-    Serial.println((String) "Summary," + temperatures[maxIndex] + "," + maxIndex + "," + temperatures[minIndex] + "," + minIndex + "," + avgTemp);
+    Serial.println((String) "Summary," + temperatures[maxIndex] + "," + maxIndex + "," + temperatures[minIndex] + "," + minIndex + "," + avgTemp + "," + R2D);
     serialTime = millis();
   } // Serial.println((String) "Max: " + temperatures[maxIndex] + " Max Index: " + maxIndex + " Min: " + temperatures[minIndex] + " Min Index: " + minIndex + " Avg: " + avgTemp);
   // Serial.println("");
