@@ -9,7 +9,7 @@ MCP2515 can0(10);                // Chip select
 // Temperature Sensor for Battery Management System
 // For "Li-ion building block Li4P25RT"
 
-#define VOLTAGE_OFFSET 0
+#define VOLTAGE_OFFSET 0.10
 #define LIGHT_PIN 13
 #define APPS_CAN_ID 0x879
 
