@@ -32,7 +32,7 @@ const int minVoltage = 1;               // minimum plausible voltage from temp s
 const int maxVoltage = 2.5;             // maximun plausible voltage from temp sensors
 const int messageInterval = 100;        // milliseconds
 const int ADC_res = 12;                 // ADC bits
-const uint32_t CAN_ID1 = 0x1839F380 + boardNum;
+const uint32_t CAN_ID1 = 0x1839F380 + boardNum | CAN_EFF_FLAG;
 const uint32_t CAN_ID2 = 0x700 + segNum;
 
 // defining pin names
